@@ -1,112 +1,241 @@
-import Image from "next/image";
+'use client';
+import {
+  SafeAuthPack,
+  SafeAuthConfig,
+  SafeAuthInitOptions,
+  SafeAuthUserInfo,
+  AuthKitSignInData,
+} from '@safe-global/auth-kit';
+import { Contract, ethers, BigNumber } from 'ethers';
+import { useEffect, useState } from 'react';
+import forwarderABI from '@/assets/Forwarder.abi.json';
+import counterABI from '@/assets/Counter.abi.json';
+
+const EIP712Domain = [
+  { name: 'name', type: 'string' },
+  { name: 'version', type: 'string' },
+  { name: 'chainId', type: 'uint256' },
+  { name: 'verifyingContract', type: 'address' },
+];
+
+const ForwardRequest = [
+  { name: 'from', type: 'address' },
+  { name: 'to', type: 'address' },
+  { name: 'value', type: 'uint256' },
+  { name: 'gas', type: 'uint256' },
+  { name: 'nonce', type: 'uint256' },
+  { name: 'deadline', type: 'uint48' },
+  { name: 'data', type: 'bytes' },
+];
+
+function getMetaTxTypeData(chainId: string, verifyingContract: string) {
+  console.debug('getMetaTxTypeData', chainId, verifyingContract);
+  return {
+    types: {
+      EIP712Domain,
+      ForwardRequest,
+    },
+    domain: {
+      name: 'ConceptProof',
+      version: '1',
+      chainId,
+      verifyingContract,
+    },
+    primaryType: 'ForwardRequest',
+  };
+}
+
+async function buildRequest(forwarder: Contract, input: any) {
+  const nonce = await forwarder
+    .nonces(input.from)
+    .then((nonce: number) => nonce.toString());
+  const deadline = BigNumber.from(1740152697).toString();
+  return { value: 0, gas: 1e6, deadline, nonce, ...input };
+}
+
+async function buildTypedData(forwarder: any, request: any) {
+  const chainId = '11155111';
+  const typeData = getMetaTxTypeData(
+    chainId,
+    '0x52c84c6aa1e19f311fd9ad5f227fe593852b0c03'
+  );
+  return { ...typeData, message: request };
+}
+
+async function signMetaTxRequest(
+  signer: ethers.providers.JsonRpcSigner,
+  forwarder: any,
+  input: any
+) {
+  const request = await buildRequest(forwarder, input);
+  const toSign = await buildTypedData(forwarder, request);
+  console.debug(
+    toSign.domain,
+    { ForwardRequest: toSign.types.ForwardRequest },
+    toSign.message
+  );
+  const signature = await signer._signTypedData(
+    toSign.domain,
+    { ForwardRequest: toSign.types.ForwardRequest },
+    toSign.message
+  );
+  return { signature, request };
+}
 
 export default function Home() {
+  const [authPack, setAuthPack] = useState<SafeAuthPack | null>(null);
+  const [count, setCount] = useState('0');
+  const [chainId, setChainId] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [safeAuthSignInResponse, setSafeAuthSignInResponse] =
+    useState<AuthKitSignInData | null>(null);
+  const [provider, setProvider] =
+    useState<ethers.providers.Web3Provider | null>(null);
+  const [balance, setBalance] = useState('');
+  const [userInfo, setUserInfo] = useState<SafeAuthUserInfo | null>(null);
+  useEffect(() => {
+    const safeAuthInitOptions: SafeAuthInitOptions = {
+      enableLogging: true,
+      showWidgetButton: true,
+      chainConfig: {
+        chainId: '0xaa36a7',
+        rpcTarget: `https://ethereum-sepolia.publicnode.com`,
+      },
+    };
+    async function initSafeAuth() {
+      const safeAuthPack = new SafeAuthPack();
+      setAuthPack(safeAuthPack);
+      await safeAuthPack.init(safeAuthInitOptions);
+      safeAuthPack.subscribe('accountsChanged', async (accounts) => {
+        console.log(
+          'safeAuthPack:accountsChanged',
+          accounts,
+          safeAuthPack.isAuthenticated
+        );
+        if (safeAuthPack.isAuthenticated) {
+          const signInInfo = await authPack?.signIn();
+
+          setSafeAuthSignInResponse(signInInfo as AuthKitSignInData);
+          setIsAuthenticated(true);
+        }
+      });
+
+      safeAuthPack.subscribe('chainChanged', (eventData) =>
+        console.log('safeAuthPack:chainChanged', eventData)
+      );
+    }
+    initSafeAuth();
+  }, []);
+  useEffect(() => {
+    if (!authPack || !isAuthenticated) return;
+    (async () => {
+      const web3Provider = authPack.getProvider();
+      const userInfo = await authPack.getUserInfo();
+      setUserInfo(userInfo);
+
+      if (web3Provider) {
+        const provider = new ethers.providers.Web3Provider(web3Provider);
+        const signer = await provider.getSigner();
+        const signerAddress = await signer.getAddress();
+
+        setChainId((await provider?.getNetwork()).chainId.toString());
+        setProvider(provider);
+      }
+    })();
+  }, [isAuthenticated]);
+  const updateCounterValue = async () => {
+    const providerRPC = new ethers.providers.JsonRpcProvider(
+      'https://ethereum-sepolia.publicnode.com'
+    );
+    const counterContract = new Contract(
+      '0x2337b268547e54a692397c3dfee7effc87f1d354', // Dirección del contrato Counter
+      counterABI,
+      providerRPC
+    );
+
+    try {
+      const number = await counterContract.number();
+      setCount(number.toString());
+    } catch (error) {
+      console.error('Error al leer el valor del contador:', error);
+    }
+  };
+
+  useEffect(() => {
+    const intervalId = setInterval(updateCounterValue, 3000); // 3000 milisegundos = 3 segundos
+
+    return () => clearInterval(intervalId);
+  }, []);
+  const handleLogin = async () => {
+    if (authPack) {
+      const authKitSignData = await authPack.signIn();
+      setSafeAuthSignInResponse(authKitSignData as AuthKitSignInData);
+      setIsAuthenticated(true);
+    }
+  };
+
+  const handleMakeGaslessTransaction = async () => {
+    if (!authPack || !provider) return;
+
+    try {
+      const signer = provider.getSigner();
+      const from = await authPack.getAddress();
+
+      const to = '0x2337b268547e54a692397c3dfee7effc87f1d354';
+      const counterContract = new Contract(to, counterABI, signer);
+      const data = counterContract.interface.encodeFunctionData('increment');
+
+      const forwarderAddress = '0x52c84c6aa1e19f311fd9ad5f227fe593852b0c03';
+      const forwarderContract = new Contract(
+        forwarderAddress,
+        forwarderABI,
+        signer
+      );
+      const input = { from, to, data };
+      console.debug(input, signer, forwarderContract);
+      const request = await signMetaTxRequest(signer, forwarderContract, input);
+      fetch('/api/makeTransaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      });
+      console.debug('Metatransacción enviada:', request);
+    } catch (error) {
+      console.error('Error al realizar la metatransacción:', error);
+    }
+  };
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/app/page.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{" "}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
+    <main className='flex min-h-screen flex-col items-center justify-between p-24'>
+      {isAuthenticated ? (
+        <div className='w-[80vw] break-words'>
+          <h1>Authenticated</h1>
         </div>
-      </div>
-
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-full sm:before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-full sm:after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700 before:dark:opacity-10 after:dark:from-sky-900 after:dark:via-[#0141ff] after:dark:opacity-40 before:lg:h-[360px] z-[-1]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:max-w-5xl lg:w-full lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
+      ) : (
+        <div className='w-[80vw] break-words'>
+          <h1>Un-Authenticated</h1>
+          <p>If this is not the first LogIn please wait a few seconds :D</p>
+        </div>
+      )}
+      <h1>CurrentCount: {count}</h1>
+      <p>Please wait a few seconds before make any action :D</p>
+      <div className='flex flew-row w-full justify-center gap-10'>
+        <button
+          className='rounded-lg text-white bg-blue-500 p-10'
+          onClick={handleLogin}
         >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Explore starter templates for Next.js.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50 text-balance`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
+          Login safe
+        </button>
+        {isAuthenticated && (
+          <button
+            className='rounded-lg text-white bg-blue-500 p-10'
+            onClick={handleMakeGaslessTransaction}
+          >
+            Make gasless transaction
+          </button>
+        )}
       </div>
     </main>
   );
