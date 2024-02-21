@@ -1,7 +1,6 @@
 'use client';
 import {
   SafeAuthPack,
-  SafeAuthConfig,
   SafeAuthInitOptions,
   SafeAuthUserInfo,
   AuthKitSignInData,
@@ -29,7 +28,6 @@ const ForwardRequest = [
 ];
 
 function getMetaTxTypeData(chainId: string, verifyingContract: string) {
-  console.debug('getMetaTxTypeData', chainId, verifyingContract);
   return {
     types: {
       EIP712Domain,
@@ -69,11 +67,7 @@ async function signMetaTxRequest(
 ) {
   const request = await buildRequest(forwarder, input);
   const toSign = await buildTypedData(forwarder, request);
-  console.debug(
-    toSign.domain,
-    { ForwardRequest: toSign.types.ForwardRequest },
-    toSign.message
-  );
+
   const signature = await signer._signTypedData(
     toSign.domain,
     { ForwardRequest: toSign.types.ForwardRequest },
@@ -94,35 +88,22 @@ export default function Home() {
   const [balance, setBalance] = useState('');
   const [userInfo, setUserInfo] = useState<SafeAuthUserInfo | null>(null);
   useEffect(() => {
-    const safeAuthInitOptions: SafeAuthInitOptions = {
-      enableLogging: true,
-      showWidgetButton: true,
-      chainConfig: {
-        chainId: '0xaa36a7',
-        rpcTarget: `https://ethereum-sepolia.publicnode.com`,
-      },
-    };
     async function initSafeAuth() {
-      const safeAuthPack = new SafeAuthPack();
-      setAuthPack(safeAuthPack);
-      await safeAuthPack.init(safeAuthInitOptions);
-      safeAuthPack.subscribe('accountsChanged', async (accounts) => {
-        console.log(
-          'safeAuthPack:accountsChanged',
-          accounts,
-          safeAuthPack.isAuthenticated
-        );
-        if (safeAuthPack.isAuthenticated) {
-          const signInInfo = await authPack?.signIn();
+      const safeAuthInitOptions: SafeAuthInitOptions = {
+        enableLogging: true,
+        showWidgetButton: true,
+        chainConfig: {
+          chainId: '0xaa36a7',
+          rpcTarget: `https://ethereum-sepolia.publicnode.com`,
+        },
+      };
+      if (typeof window !== 'undefined') {
+        const { SafeAuthPack } = await import('@safe-global/auth-kit');
 
-          setSafeAuthSignInResponse(signInInfo as AuthKitSignInData);
-          setIsAuthenticated(true);
-        }
-      });
-
-      safeAuthPack.subscribe('chainChanged', (eventData) =>
-        console.log('safeAuthPack:chainChanged', eventData)
-      );
+        const safeAuthPack = new SafeAuthPack();
+        setAuthPack(safeAuthPack);
+        await safeAuthPack.init(safeAuthInitOptions);
+      }
     }
     initSafeAuth();
   }, []);
