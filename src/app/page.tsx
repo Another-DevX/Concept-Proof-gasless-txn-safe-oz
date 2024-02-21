@@ -200,7 +200,11 @@ export default function Home() {
           <p>If this is not the first LogIn please wait a few seconds :D</p>
         </div>
       )}
-      <h1>CurrentCount: {count}</h1>
+      <div>
+        <h1>CurrentCount: {count}</h1>
+        <p>This is a state in a counter contract </p>
+      </div>
+
       <p>Please wait a few seconds before make any action :D</p>
       <div className='flex flew-row w-full justify-center gap-10'>
         <button
